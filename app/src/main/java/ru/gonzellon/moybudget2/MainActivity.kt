@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun BudgetApp() {
     var selectedTab by remember { mutableStateOf(0) }
 
