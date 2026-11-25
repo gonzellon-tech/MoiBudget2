@@ -62,6 +62,8 @@ class MainActivity : Activity() {
     private var activeTab = 0 // 0 RUB, 1 KGS, 2 combined
     private var selectedDate = today()
     private var editingEntryId: Long? = null
+    private var searchQuery = ""
+    private var typeFilter = "ALL"
     private var kgsToRub = 0.93938
     private var rateUpdatedAt = "Не обновлялся"
     private var rateStatus = "Курс сохранён"
@@ -306,10 +308,54 @@ class MainActivity : Activity() {
         }
         content.addView(add, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(6); bottomMargin = dp(18) })
 
+        val searchField = EditText(this).apply {
+            hint = "Поиск по названию операции"
+            setSingleLine(true)
+            textSize = 14f
+            setTextColor(Color.BLACK)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setText(searchQuery)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    searchQuery = s?.toString() ?: ""
+                }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    render()
+                    true
+                } else false
+            }
+        }
+        content.addView(searchField, fieldParams())
+        val filterTabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(10))
+        }
+        listOf("Все", "Доходы", "Расходы").forEachIndexed { index, label ->
+            val value = listOf("ALL", "INCOME", "EXPENSE")[index]
+            val button = Button(this).apply {
+                text = label
+                textSize = 12f
+                isAllCaps = false
+                setTextColor(if (typeFilter == value) Color.WHITE else green)
+                background = roundedBackground(if (typeFilter == value) green else Color.rgb(230, 238, 232), 12)
+                setOnClickListener { typeFilter = value; render() }
+            }
+            filterTabs.addView(button, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                if (index > 0) marginStart = dp(5)
+            })
+        }
+        content.addView(filterTabs)
         text(content, "Операции", 18, Color.BLACK, true)
         val filtered = entries.filter {
             val cur = currencyOf(it)
-            activeTab == 2 || cur == if (activeTab == 0) "RUB" else "KGS"
+            val matchesCurrency = activeTab == 2 || cur == if (activeTab == 0) "RUB" else "KGS"
+            val matchesSearch = it.title.contains(searchQuery.trim(), ignoreCase = true)
+            val matchesType = typeFilter == "ALL" || it.type == typeFilter
+            matchesCurrency && matchesSearch && matchesType
         }.sortedByDescending { it.date }
         if (filtered.isEmpty()) text(content, "Пока нет записей", 14, muted, false)
         filtered.forEach { e ->
