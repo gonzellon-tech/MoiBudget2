@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.view.MotionEvent
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -65,6 +66,10 @@ class MainActivity : Activity() {
     private var searchQuery = ""
     private var typeFilter = "ALL"
     private var selectedMonth = YearMonth.now().toString()
+    private var currentPage = 0 // 0 — бюджет, 1 — депозиты
+    private var depositTab = 2 // 0 RUB, 1 KGS, 2 Общее
+    private var touchStartX = 0f
+    private var touchStartY = 0f
     private var kgsToRub = 0.93938
     private var rateUpdatedAt = "Не обновлялся"
     private var rateStatus = "Курс сохранён"
@@ -96,7 +101,16 @@ class MainActivity : Activity() {
     private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
     private fun render() {
-        root = LinearLayout(this).apply {
+        if (currentPage == 1) {
+            renderDeposits()
+            return
+        }
+        root = object : LinearLayout(this) {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                handleSwipe(event)
+                return super.dispatchTouchEvent(event)
+            }
+        }.apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
             setPadding(dp(16), dp(18), dp(16), dp(12))
@@ -196,8 +210,8 @@ class MainActivity : Activity() {
             text(card, money(current, symbol), 25, green, true)
             text(card, "Остаток на $selectedDate", 13, muted, false)
             text(card, money(balance, symbol), 22, Color.BLACK, true)
-            val inc = sumFor(currency, "INCOME")
-            val exp = sumFor(currency, "EXPENSE")
+            val inc = sumFor(currency, "INCOME", selectedDate)
+            val exp = sumFor(currency, "EXPENSE", selectedDate)
             text(card, "Доходы: ${money(inc, symbol)}   Расходы: ${money(exp, symbol)}", 12, muted, false)
             content.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
         }
@@ -442,6 +456,83 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun handleSwipe(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                touchStartX = event.x
+                touchStartY = event.y
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                val dx = event.x - touchStartX
+                val dy = event.y - touchStartY
+                if (kotlin.math.abs(dx) > dp(100) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f) {
+                    currentPage = if (dx < 0) 1 else 0
+                    render()
+                    return true
+                }
+            }
+        }
+        return true
+    }
+
+    private fun renderDeposits() {
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
+            setPadding(dp(16), dp(18), dp(16), dp(12))
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        text(content, "Депозиты", 26, Color.BLACK, true)
+        text(content, "Управление вкладами и начисленными процентами", 13, muted, false)
+
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(16), 0, dp(12))
+        }
+
+        listOf("Рубли ₽", "Сомы", "Общее").forEachIndexed { index, name ->
+            val button = Button(this).apply {
+                text = name
+                textSize = 12f
+                isAllCaps = false
+                setPadding(dp(4), 0, dp(4), 0)
+                minHeight = 0
+                background = roundedBackground(
+                    if (depositTab == index) green else Color.rgb(230, 238, 232), 14
+                )
+                setTextColor(if (depositTab == index) Color.WHITE else green)
+                setOnClickListener {
+                    depositTab = index
+                    render()
+                }
+            }
+            tabs.addView(button, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+                if (index > 0) marginStart = dp(5)
+            })
+        }
+
+        content.addView(tabs)
+        text(content, "Пока депозитов нет", 15, muted, false)
+
+        val backButton = Button(this).apply {
+            text = "← Вернуться к бюджету"
+            isAllCaps = false
+            setOnClickListener {
+                currentPage = 0
+                render()
+            }
+        }
+        content.addView(backButton)
+
+        root.addView(content)
+        setContentView(root)
+    }
+
     private fun currencyOf(e: Entry): String = if (e.category.endsWith("¦KGS")) "KGS" else "RUB"
     private fun categoryOf(e: Entry): String = e.category.substringBefore("¦")
     private fun balanceAt(currency: String, date: String): Double {
@@ -471,8 +562,42 @@ class MainActivity : Activity() {
             }
         }
     }
-    private fun sumFor(currency: String, type: String): Double =
-        entries.filter { currencyOf(it) == currency && it.type == type }.sumOf { it.amount }
+    private fun sumFor(currency: String, type: String, date: String): Double {
+        val target = try { LocalDate.parse(date) } catch (_: Exception) { LocalDate.now() }
+
+        return entries.filter {
+            currencyOf(it) == currency && it.type == type
+        }.sumOf { entry ->
+            val start = try { LocalDate.parse(entry.date) } catch (_: Exception) {
+                return@sumOf 0.0
+            }
+
+            if (start.isAfter(target)) return@sumOf 0.0
+
+            when (entry.recurringType) {
+                "WEEKLY" -> {
+                    val days = java.time.temporal.ChronoUnit.DAYS.between(start, target)
+                    entry.amount * ((days / 7) + 1)
+                }
+                "MONTHLY" -> {
+                    var month = YearMonth.from(start)
+                    val lastMonth = YearMonth.from(target)
+                    var count = 0
+                    while (!month.isAfter(lastMonth)) {
+                        val occurrence = month.atDay(
+                            minOf(start.dayOfMonth, month.lengthOfMonth())
+                        )
+                        if (!occurrence.isBefore(start) && !occurrence.isAfter(target)) {
+                            count++
+                        }
+                        month = month.plusMonths(1)
+                    }
+                    entry.amount * count
+                }
+                else -> entry.amount
+            }
+        }
+    }
 
     private fun money(value: Double, symbol: String): String {
         val formatted = String.format(Locale("ru", "RU"), "%,.2f", value).replace('\u00a0', ' ')
