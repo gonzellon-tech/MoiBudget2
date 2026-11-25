@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var editingEntryId: Long? = null
     private var searchQuery = ""
     private var typeFilter = "ALL"
+    private var selectedMonth = YearMonth.now().toString()
     private var kgsToRub = 0.93938
     private var rateUpdatedAt = "Не обновлялся"
     private var rateStatus = "Курс сохранён"
@@ -348,14 +349,57 @@ class MainActivity : Activity() {
                 if (index > 0) marginStart = dp(5)
             })
         }
+        val monthButton = Button(this).apply {
+            text = "Месяц: $selectedMonth"
+            isAllCaps = false
+            setOnClickListener {
+                val parts = selectedMonth.split("-")
+                val year = parts[0].toInt()
+                val month = parts[1].toInt() - 1
+                val c = Calendar.getInstance()
+                c.set(year, month, 1)
+                DatePickerDialog(this@MainActivity, { _, y, m, _ ->
+                    selectedMonth = String.format(Locale.US, "%04d-%02d", y, m + 1)
+                    render()
+                }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), 1).show()
+            }
+        }
+        content.addView(monthButton, fieldParams())
         content.addView(filterTabs)
         text(content, "Операции", 18, Color.BLACK, true)
+        val monthEntries = entries.filter {
+            it.date.startsWith(selectedMonth) &&
+                (activeTab == 2 || currencyOf(it) == if (activeTab == 0) "RUB" else "KGS")
+        }
+        val monthIncome = monthEntries.filter { it.type == "INCOME" }.sumOf { it.amount }
+        val monthExpense = monthEntries.filter { it.type == "EXPENSE" }.sumOf { it.amount }
+        val statsCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(Color.WHITE, 16, Color.rgb(230, 238, 232), 1)
+        }
+        if (activeTab == 2) {
+            for (cur in listOf("RUB", "KGS")) {
+                val symbol = if (cur == "RUB") "₽" else "сом"
+                val income = monthEntries.filter { currencyOf(it) == cur && it.type == "INCOME" }.sumOf { it.amount }
+                val expense = monthEntries.filter { currencyOf(it) == cur && it.type == "EXPENSE" }.sumOf { it.amount }
+                text(statsCard, "$cur: доходы ${money(income, symbol)} • расходы ${money(expense, symbol)}", 12, muted, false)
+                text(statsCard, "Разница: ${money(income - expense, symbol)}", 13, green, true)
+            }
+        } else {
+            val symbol = if (activeTab == 0) "₽" else "сом"
+            text(statsCard, "Доходы: ${money(monthIncome, symbol)}", 13, green, true)
+            text(statsCard, "Расходы: ${money(monthExpense, symbol)}", 13, Color.rgb(160, 65, 65), true)
+            text(statsCard, "Разница: ${money(monthIncome - monthExpense, symbol)}", 15, Color.BLACK, true)
+        }
+        content.addView(statsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
         val filtered = entries.filter {
             val cur = currencyOf(it)
             val matchesCurrency = activeTab == 2 || cur == if (activeTab == 0) "RUB" else "KGS"
             val matchesSearch = it.title.contains(searchQuery.trim(), ignoreCase = true)
             val matchesType = typeFilter == "ALL" || it.type == typeFilter
-            matchesCurrency && matchesSearch && matchesType
+            val matchesMonth = it.date.startsWith(selectedMonth)
+            matchesCurrency && matchesSearch && matchesType && matchesMonth
         }.sortedByDescending { it.date }
         if (filtered.isEmpty()) text(content, "Пока нет записей", 14, muted, false)
         filtered.forEach { e ->
