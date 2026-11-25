@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -146,8 +147,12 @@ class MainActivity : Activity() {
                 text = name
                 textSize = 12f
                 isAllCaps = false
+                setPadding(dp(4), 0, dp(4), 0)
+                minHeight = 0
+                minimumHeight = 0
+                elevation = 0f
                 setTextColor(if (activeTab == index) Color.WHITE else green)
-                setBackgroundColor(if (activeTab == index) green else Color.rgb(230, 238, 232))
+                background = roundedBackground(if (activeTab == index) green else Color.rgb(230, 238, 232), 14)
                 setOnClickListener { activeTab = index; render() }
             }
             tabs.addView(b, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
@@ -164,7 +169,7 @@ class MainActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(16), dp(15), dp(16), dp(15))
-                setBackgroundColor(Color.WHITE)
+                background = roundedBackground(Color.WHITE, 18, Color.rgb(230, 238, 232), 1)
             }
             text(card, "Общий баланс сейчас", 14, muted, true)
             text(card, money(rubNow + kgsNow * kgsToRub, "₽"), 27, green, true)
@@ -182,7 +187,7 @@ class MainActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(16), dp(15), dp(16), dp(15))
-                setBackgroundColor(Color.WHITE)
+                background = roundedBackground(Color.WHITE, 18, Color.rgb(230, 238, 232), 1)
             }
             text(card, "Текущий остаток", 14, muted, true)
             text(card, money(current, symbol), 25, green, true)
@@ -393,6 +398,14 @@ class MainActivity : Activity() {
         }
         parent.addView(v)
     }
+    private fun roundedBackground(color: Int, radius: Int, strokeColor: Int = Color.TRANSPARENT, strokeWidth: Int = 0): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+            if (strokeWidth > 0) setStroke(dp(strokeWidth), strokeColor)
+        }
+    }
+
     private fun fieldParams() = LinearLayout.LayoutParams(-1, dp(52)).apply { bottomMargin = dp(5) }
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
