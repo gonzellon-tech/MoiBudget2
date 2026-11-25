@@ -30,6 +30,24 @@ data class Entry(
     val recurringType: String = "NONE"
 )
 
+data class Deposit(
+    val id: Long,
+    val title: String,
+    val currency: String,
+    val initialAmount: Double,
+    val annualRate: Double,
+    val startDate: String,
+    val endDate: String,
+    val transferredToUnallocated: Boolean = false
+)
+
+data class DepositTopUp(
+    val id: Long,
+    val depositId: Long,
+    val amount: Double,
+    val date: String
+)
+
 class MainActivity : Activity() {
     companion object {
         private const val REQUEST_EXPORT = 1001
@@ -37,6 +55,8 @@ class MainActivity : Activity() {
     }
     private val prefs by lazy { getSharedPreferences("budget_data", Context.MODE_PRIVATE) }
     private val entries = mutableListOf<Entry>()
+    private val deposits = mutableListOf<Deposit>()
+    private val depositTopUps = mutableListOf<DepositTopUp>()
     private val currencies = listOf("RUB", "KGS")
     private var activeTab = 0 // 0 RUB, 1 KGS, 2 combined
     private var selectedDate = today()
@@ -242,7 +262,7 @@ class MainActivity : Activity() {
         content.addView(recurringSpinner, fieldParams())
 
         val add = Button(this).apply {
-            text = "Добавить операцию"
+            text = if (editingEntryId != null) "Сохранить изменения" else "Добавить операцию"
             isAllCaps = false
             setBackgroundColor(green)
             setTextColor(Color.WHITE)
@@ -429,6 +449,28 @@ class MainActivity : Activity() {
             .put("kgsToRub", kgsToRub)
             .put("rateUpdatedAt", rateUpdatedAt)
             .put("entries", arr)
+            .put("deposits", JSONArray().apply {
+                deposits.forEach {
+                    put(JSONObject()
+                        .put("id", it.id)
+                        .put("title", it.title)
+                        .put("currency", it.currency)
+                        .put("initialAmount", it.initialAmount)
+                        .put("annualRate", it.annualRate)
+                        .put("startDate", it.startDate)
+                        .put("endDate", it.endDate)
+                        .put("transferredToUnallocated", it.transferredToUnallocated))
+                }
+            })
+            .put("depositTopUps", JSONArray().apply {
+                depositTopUps.forEach {
+                    put(JSONObject()
+                        .put("id", it.id)
+                        .put("depositId", it.depositId)
+                        .put("amount", it.amount)
+                        .put("date", it.date))
+                }
+            })
 
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -503,6 +545,34 @@ class MainActivity : Activity() {
                     ))
                 }
 
+                val restoredDeposits = mutableListOf<Deposit>()
+                val depositsArray = backup.optJSONArray("deposits") ?: JSONArray()
+                for (i in 0 until depositsArray.length()) {
+                    val o = depositsArray.getJSONObject(i)
+                    restoredDeposits.add(Deposit(
+                        o.getLong("id"),
+                        o.getString("title"),
+                        o.getString("currency"),
+                        o.getDouble("initialAmount"),
+                        o.getDouble("annualRate"),
+                        o.getString("startDate"),
+                        o.getString("endDate"),
+                        o.optBoolean("transferredToUnallocated", false)
+                    ))
+                }
+
+                val restoredTopUps = mutableListOf<DepositTopUp>()
+                val topUpsArray = backup.optJSONArray("depositTopUps") ?: JSONArray()
+                for (i in 0 until topUpsArray.length()) {
+                    val o = topUpsArray.getJSONObject(i)
+                    restoredTopUps.add(DepositTopUp(
+                        o.getLong("id"),
+                        o.getLong("depositId"),
+                        o.getDouble("amount"),
+                        o.getString("date")
+                    ))
+                }
+
                 android.app.AlertDialog.Builder(this)
                     .setTitle("Восстановить данные?")
                     .setMessage("Текущие операции будут заменены. В файле найдено записей: ${restored.size}.")
@@ -510,6 +580,10 @@ class MainActivity : Activity() {
                     .setPositiveButton("Восстановить") { _, _ ->
                         entries.clear()
                         entries.addAll(restored)
+                        deposits.clear()
+                        deposits.addAll(restoredDeposits)
+                        depositTopUps.clear()
+                        depositTopUps.addAll(restoredTopUps)
                         kgsToRub = backup.optDouble("kgsToRub", kgsToRub)
                         rateUpdatedAt = backup.optString("rateUpdatedAt", rateUpdatedAt)
                         prefs.edit()
