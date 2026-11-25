@@ -26,7 +26,7 @@ data class Entry(
     val date: String,
     val type: String,
     val category: String,
-    val recurring: Boolean
+    val recurringType: String = "NONE"
 )
 
 class MainActivity : Activity() {
@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private val currencies = listOf("RUB", "KGS")
     private var activeTab = 0 // 0 RUB, 1 KGS, 2 combined
     private var selectedDate = today()
+    private var editingEntryId: Long? = null
     private var kgsToRub = 0.93938
     private var rateUpdatedAt = "Не обновлялся"
     private var rateStatus = "Курс сохранён"
@@ -168,27 +169,32 @@ class MainActivity : Activity() {
         }
         content.addView(dateButton, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
-        text(content, "Добавить операцию", 18, Color.BLACK, true)
+        val editingEntry = entries.find { it.id == editingEntryId }
+        text(content, if (editingEntry == null) "Добавить операцию" else "Редактировать операцию", 18, Color.BLACK, true)
         val titleInput = EditText(this).apply { hint = "Название операции"; textSize = 15f }
+        titleInput.setText(editingEntry?.title ?: "")
         content.addView(titleInput, fieldParams())
         val amountInput = EditText(this).apply {
             hint = "Сумма"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             textSize = 15f
         }
+        if (editingEntry != null) amountInput.setText(editingEntry.amount.toString())
         content.addView(amountInput, fieldParams())
         val currencySpinner = Spinner(this)
         currencySpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, currencies)
-        currencySpinner.setSelection(if (activeTab == 1) 1 else 0)
+        currencySpinner.setSelection(if (editingEntry != null) { if (currencyOf(editingEntry) == "KGS") 1 else 0 } else if (activeTab == 1) 1 else 0)
         content.addView(currencySpinner, fieldParams())
 
         val typeSpinner = Spinner(this)
         typeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Расход", "Доход"))
+        if (editingEntry?.type == "INCOME") typeSpinner.setSelection(1)
         content.addView(typeSpinner, fieldParams())
 
         val categorySpinner = Spinner(this)
         val categories = listOf("Продукты", "Жильё", "Транспорт", "Здоровье", "Связь", "Покупки", "Зарплата", "Прочее")
         categorySpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categories)
+        if (editingEntry != null) categorySpinner.setSelection(categories.indexOf(categoryOf(editingEntry)).coerceAtLeast(0))
         content.addView(categorySpinner, fieldParams())
 
         val operationDate = TextView(this).apply {
@@ -206,11 +212,12 @@ class MainActivity : Activity() {
         }
         content.addView(operationDate)
 
-        val recurring = CheckBox(this).apply {
-            text = "Повторяющийся платёж (ежемесячно)"
-            setTextColor(Color.DKGRAY)
+        val recurringSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("Без повторения", "Еженедельно", "Ежемесячно"))
         }
-        content.addView(recurring)
+        recurringSpinner.setSelection(when (editingEntry?.recurringType) { "WEEKLY" -> 1; "MONTHLY" -> 2; else -> 0 })
+        content.addView(recurringSpinner, fieldParams())
 
         val add = Button(this).apply {
             text = "Добавить операцию"
@@ -227,14 +234,26 @@ class MainActivity : Activity() {
                 val cur = currencySpinner.selectedItem.toString()
                 val typ = if (typeSpinner.selectedItemPosition == 0) "EXPENSE" else "INCOME"
                 val date = selectedDate
-                entries.add(Entry(System.currentTimeMillis(), name, amount, date, typ,
-                    categorySpinner.selectedItem.toString(), recurring.isChecked))
+                val recurringType = when (recurringSpinner.selectedItemPosition) {
+                    1 -> "WEEKLY"
+                    2 -> "MONTHLY"
+                    else -> "NONE"
+                }
+                val category = "${categorySpinner.selectedItem}¦$cur"
+                val id = editingEntryId ?: System.currentTimeMillis()
+                val updated = Entry(id, name, amount, date, typ, category, recurringType)
+                if (editingEntryId != null) {
+                    val index = entries.indexOfFirst { it.id == editingEntryId }
+                    if (index >= 0) entries[index] = updated else entries.add(updated)
+                } else {
+                    entries.add(updated)
+                }
                 saveEntries()
-                Toast.makeText(this@MainActivity, "Операция добавлена", Toast.LENGTH_SHORT).show()
-                // Currency is encoded in category suffix for compact persistence.
-                val last = entries.removeAt(entries.lastIndex)
-                entries.add(last.copy(category = "${last.category}¦$cur"))
-                saveEntries()
+                val wasEditing = editingEntryId != null
+                editingEntryId = null
+                Toast.makeText(this@MainActivity,
+                    if (wasEditing) "Операция обновлена" else "Операция добавлена",
+                    Toast.LENGTH_SHORT).show()
                 render()
             }
         }
@@ -257,14 +276,26 @@ class MainActivity : Activity() {
             val label = if (e.type == "INCOME") "＋" else "−"
             text(row, "${e.title}   $label${money(e.amount, symbol)}", 15,
                 if (e.type == "INCOME") green else Color.rgb(160, 65, 65), true)
-            text(row, "${e.date} • ${categoryOf(e)}${if (e.recurring) " • ежемесячно" else ""} • $currency", 12, muted, false)
+            text(row, "${e.date} • ${categoryOf(e)}${when (e.recurringType) { "WEEKLY" -> " • еженедельно"; "MONTHLY" -> " • ежемесячно"; else -> "" }} • $currency", 12, muted, false)
+            row.setOnClickListener {
+                editingEntryId = e.id
+                selectedDate = e.date
+                render()
+            }
             val del = Button(this).apply {
                 text = "Удалить"
                 isAllCaps = false
                 setOnClickListener {
-                    entries.removeAll { it.id == e.id }
-                    saveEntries()
-                    render()
+                    android.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Удалить операцию?")
+                        .setMessage(e.title)
+                        .setNegativeButton("Отмена", null)
+                        .setPositiveButton("Удалить") { _, _ ->
+                            entries.removeAll { it.id == e.id }
+                            saveEntries()
+                            render()
+                        }
+                        .show()
                 }
             }
             row.addView(del)
@@ -282,18 +313,24 @@ class MainActivity : Activity() {
             val start = try { LocalDate.parse(entry.date) } catch (_: Exception) { return@sumOf 0.0 }
             if (start.isAfter(target)) return@sumOf 0.0
             val sign = if (entry.type == "INCOME") 1.0 else -1.0
-            if (!entry.recurring) {
-                sign * entry.amount
-            } else {
-                var month = YearMonth.from(start)
-                val lastMonth = YearMonth.from(target)
-                var count = 0
-                while (!month.isAfter(lastMonth)) {
-                    val occurrence = month.atDay(minOf(start.dayOfMonth, month.lengthOfMonth()))
-                    if (!occurrence.isBefore(start) && !occurrence.isAfter(target)) count++
-                    month = month.plusMonths(1)
+            when (entry.recurringType) {
+                "WEEKLY" -> {
+                    val days = java.time.temporal.ChronoUnit.DAYS.between(start, target)
+                    val count = (days / 7) + 1
+                    sign * entry.amount * count
                 }
-                sign * entry.amount * count
+                "MONTHLY" -> {
+                    var month = YearMonth.from(start)
+                    val lastMonth = YearMonth.from(target)
+                    var count = 0
+                    while (!month.isAfter(lastMonth)) {
+                        val occurrence = month.atDay(minOf(start.dayOfMonth, month.lengthOfMonth()))
+                        if (!occurrence.isBefore(start) && !occurrence.isAfter(target)) count++
+                        month = month.plusMonths(1)
+                    }
+                    sign * entry.amount * count
+                }
+                else -> sign * entry.amount
             }
         }
     }
@@ -355,7 +392,7 @@ class MainActivity : Activity() {
         entries.forEach {
             arr.put(JSONObject().put("id", it.id).put("title", it.title).put("amount", it.amount)
                 .put("date", it.date).put("type", it.type).put("category", it.category)
-                .put("recurring", it.recurring))
+                .put("recurringType", it.recurringType))
         }
         prefs.edit().putString("entries", arr.toString()).apply()
     }
@@ -366,7 +403,7 @@ class MainActivity : Activity() {
                 val o = arr.getJSONObject(i)
                 entries.add(Entry(o.getLong("id"), o.getString("title"), o.getDouble("amount"),
                     o.getString("date"), o.getString("type"), o.getString("category"),
-                    o.optBoolean("recurring", false)))
+                    o.optString("recurringType", if (o.optBoolean("recurring", false)) "MONTHLY" else "NONE")))
             }
         } catch (_: Exception) {}
     }
