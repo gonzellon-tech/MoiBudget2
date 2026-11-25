@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.DatePickerDialog
 import android.os.Bundle
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.view.Gravity
 import android.view.View
@@ -30,6 +31,10 @@ data class Entry(
 )
 
 class MainActivity : Activity() {
+    companion object {
+        private const val REQUEST_EXPORT = 1001
+        private const val REQUEST_IMPORT = 1002
+    }
     private val prefs by lazy { getSharedPreferences("budget_data", Context.MODE_PRIVATE) }
     private val entries = mutableListOf<Entry>()
     private val currencies = listOf("RUB", "KGS")
@@ -93,6 +98,23 @@ class MainActivity : Activity() {
         rateLine.addView(updateRate)
         content.addView(rateLine)
         text(content, "$rateStatus • $rateUpdatedAt", 11, muted, false)
+
+        val backupButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val exportButton = Button(this).apply {
+            text = "Экспорт данных"
+            isAllCaps = false
+            setOnClickListener { exportData() }
+        }
+        val importButton = Button(this).apply {
+            text = "Импорт данных"
+            isAllCaps = false
+            setOnClickListener { importData() }
+        }
+        backupButtons.addView(exportButton, LinearLayout.LayoutParams(0, -2, 1f))
+        backupButtons.addView(importButton, LinearLayout.LayoutParams(0, -2, 1f))
+        content.addView(backupButtons)
 
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -384,6 +406,125 @@ class MainActivity : Activity() {
                     render()
                 }
             }
+        }
+    }
+
+
+    private fun exportData() {
+        val arr = JSONArray()
+        entries.forEach {
+            arr.put(JSONObject()
+                .put("id", it.id)
+                .put("title", it.title)
+                .put("amount", it.amount)
+                .put("date", it.date)
+                .put("type", it.type)
+                .put("category", it.category)
+                .put("recurringType", it.recurringType))
+        }
+
+        val backup = JSONObject()
+            .put("format", "MoiBudget2")
+            .put("version", 1)
+            .put("kgsToRub", kgsToRub)
+            .put("rateUpdatedAt", rateUpdatedAt)
+            .put("entries", arr)
+
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "MoiBudget2-backup.json")
+        }
+        startActivityForResult(intent, REQUEST_EXPORT)
+    }
+
+    private fun importData() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+        }
+        startActivityForResult(intent, REQUEST_IMPORT)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+
+        try {
+            if (requestCode == REQUEST_EXPORT) {
+                val arr = JSONArray()
+                entries.forEach {
+                    arr.put(JSONObject()
+                        .put("id", it.id)
+                        .put("title", it.title)
+                        .put("amount", it.amount)
+                        .put("date", it.date)
+                        .put("type", it.type)
+                        .put("category", it.category)
+                        .put("recurringType", it.recurringType))
+                }
+                val backup = JSONObject()
+                    .put("format", "MoiBudget2")
+                    .put("version", 1)
+                    .put("kgsToRub", kgsToRub)
+                    .put("rateUpdatedAt", rateUpdatedAt)
+                    .put("entries", arr)
+
+                contentResolver.openOutputStream(uri)?.bufferedWriter()?.use {
+                    it.write(backup.toString(2))
+                } ?: throw Exception("Не удалось открыть файл для записи")
+
+                Toast.makeText(this, "Резервная копия сохранена", Toast.LENGTH_LONG).show()
+
+            } else if (requestCode == REQUEST_IMPORT) {
+                val json = contentResolver.openInputStream(uri)?.bufferedReader()?.use {
+                    it.readText()
+                } ?: throw Exception("Не удалось прочитать файл")
+
+                val backup = JSONObject(json)
+                if (backup.optString("format") != "MoiBudget2" || !backup.has("entries")) {
+                    throw Exception("Это не резервная копия Мой бюджет 2")
+                }
+
+                val arr = backup.getJSONArray("entries")
+                val restored = mutableListOf<Entry>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    restored.add(Entry(
+                        o.getLong("id"),
+                        o.getString("title"),
+                        o.getDouble("amount"),
+                        o.getString("date"),
+                        o.getString("type"),
+                        o.getString("category"),
+                        o.optString("recurringType",
+                            if (o.optBoolean("recurring", false)) "MONTHLY" else "NONE")
+                    ))
+                }
+
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Восстановить данные?")
+                    .setMessage("Текущие операции будут заменены. В файле найдено записей: ${restored.size}.")
+                    .setNegativeButton("Отмена", null)
+                    .setPositiveButton("Восстановить") { _, _ ->
+                        entries.clear()
+                        entries.addAll(restored)
+                        kgsToRub = backup.optDouble("kgsToRub", kgsToRub)
+                        rateUpdatedAt = backup.optString("rateUpdatedAt", rateUpdatedAt)
+                        prefs.edit()
+                            .putString("kgs_to_rub", kgsToRub.toString())
+                            .putString("rate_updated_at", rateUpdatedAt)
+                            .apply()
+                        saveEntries()
+                        editingEntryId = null
+                        render()
+                        Toast.makeText(this, "Данные восстановлены", Toast.LENGTH_LONG).show()
+                    }
+                    .show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
