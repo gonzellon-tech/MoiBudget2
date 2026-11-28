@@ -85,6 +85,7 @@ class MainActivity : Activity() {
 
         try {
             loadEntries()
+            loadDeposits()
             render()
             fetchRate(silent = true)
         } catch (e: Throwable) {
@@ -444,6 +445,7 @@ class MainActivity : Activity() {
                         .setPositiveButton("Удалить") { _, _ ->
                             entries.removeAll { it.id == e.id }
                             saveEntries()
+                        saveDeposits()
                             render()
                         }
                         .show()
@@ -517,7 +519,59 @@ class MainActivity : Activity() {
         }
 
         content.addView(tabs)
-        text(content, "Пока депозитов нет", 15, muted, false)
+
+        val addDepositButton = Button(this).apply {
+            text = "+ Открыть депозит"
+            isAllCaps = false
+            setBackgroundColor(green)
+            setTextColor(Color.WHITE)
+            setOnClickListener { showAddDepositDialog() }
+        }
+        content.addView(addDepositButton, LinearLayout.LayoutParams(-1, dp(50)).apply {
+            bottomMargin = dp(12)
+        })
+
+        val visibleDeposits = deposits.filter {
+            depositTab == 2 ||
+                (depositTab == 0 && it.currency == "RUB") ||
+                (depositTab == 1 && it.currency == "KGS")
+        }
+        if (visibleDeposits.isEmpty()) {
+            text(content, "Пока депозитов нет", 15, muted, false)
+        }
+
+        val calculationDate = LocalDate.now()
+        visibleDeposits.forEach { deposit ->
+            val symbol = if (deposit.currency == "RUB") "₽" else "сом"
+            val principal = depositPrincipalAt(deposit, calculationDate)
+            val interest = depositInterestAt(deposit, calculationDate)
+
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = roundedBackground(
+                    Color.WHITE, 16, Color.rgb(230, 238, 232), 1
+                )
+            }
+            text(card, deposit.title, 17, Color.BLACK, true)
+            text(
+                card,
+                "Основная сумма: ${money(principal, symbol)}",
+                14, green, true
+            )
+            text(card, "Ставка: ${deposit.annualRate}% годовых", 13, muted, false)
+            text(
+                card,
+                "Начисленные проценты: ${money(interest, symbol)}",
+                14, green, true
+            )
+            text(card, "Открыт: ${deposit.startDate}", 12, muted, false)
+            text(card, "Окончание: ${deposit.endDate}", 12, muted, false)
+
+            content.addView(card, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(10)
+            })
+        }
 
         val backButton = Button(this).apply {
             text = "← Вернуться к бюджету"
@@ -531,6 +585,170 @@ class MainActivity : Activity() {
 
         root.addView(content)
         setContentView(root)
+    }
+
+    private fun depositPrincipalAt(deposit: Deposit, date: LocalDate): Double {
+        val start = LocalDate.parse(deposit.startDate)
+        if (date.isBefore(start)) return 0.0
+        return deposit.initialAmount + depositTopUps
+            .filter { it.depositId == deposit.id }
+            .sumOf {
+                val topUpDate = try { LocalDate.parse(it.date) } catch (_: Exception) {
+                    return@sumOf 0.0
+                }
+                if (!topUpDate.isAfter(date) && !topUpDate.isBefore(start)) it.amount else 0.0
+            }
+    }
+
+    private fun depositInterestAt(deposit: Deposit, date: LocalDate): Double {
+        val start = LocalDate.parse(deposit.startDate)
+        val end = LocalDate.parse(deposit.endDate)
+        if (date.isBefore(start)) return 0.0
+
+        val lastDay = minOf(date, end)
+        var day = start
+        var interest = 0.0
+
+        while (!day.isAfter(lastDay)) {
+            val principal = depositPrincipalAt(deposit, day)
+            interest += principal * deposit.annualRate / 100.0 / day.lengthOfYear()
+            day = day.plusDays(1)
+        }
+        return interest
+    }
+
+    private fun showAddDepositDialog() {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+
+        val titleInput = EditText(this).apply {
+            hint = "Название депозита"
+            textSize = 15f
+        }
+        form.addView(titleInput)
+
+        val currencySpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("RUB", "KGS")
+            )
+            setSelection(if (depositTab == 1) 1 else 0)
+        }
+        form.addView(currencySpinner)
+
+        val amountInput = EditText(this).apply {
+            hint = "Первоначальная сумма"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        form.addView(amountInput)
+
+        val rateInput = EditText(this).apply {
+            hint = "Годовая ставка, %"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        form.addView(rateInput)
+
+        var startDate = today()
+        var endDate = LocalDate.now().plusYears(1).toString()
+
+        val startButton = Button(this).apply {
+            text = "Дата открытия: $startDate"
+            isAllCaps = false
+            setOnClickListener {
+                val date = LocalDate.parse(startDate)
+                DatePickerDialog(
+                    this@MainActivity,
+                    { _, y, m, d ->
+                        startDate = String.format(
+                            Locale.US, "%04d-%02d-%02d", y, m + 1, d
+                        )
+                        text = "Дата открытия: $startDate"
+                    },
+                    date.year, date.monthValue - 1, date.dayOfMonth
+                ).show()
+            }
+        }
+        form.addView(startButton)
+
+        val endButton = Button(this).apply {
+            text = "Дата окончания: $endDate"
+            isAllCaps = false
+            setOnClickListener {
+                val date = LocalDate.parse(endDate)
+                DatePickerDialog(
+                    this@MainActivity,
+                    { _, y, m, d ->
+                        endDate = String.format(
+                            Locale.US, "%04d-%02d-%02d", y, m + 1, d
+                        )
+                        text = "Дата окончания: $endDate"
+                    },
+                    date.year, date.monthValue - 1, date.dayOfMonth
+                ).show()
+            }
+        }
+        form.addView(endButton)
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Новый депозит")
+            .setView(form)
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Создать", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                        .setOnClickListener {
+                            val name = titleInput.text.toString().trim()
+                            val amount = amountInput.text.toString()
+                                .replace(',', '.').toDoubleOrNull()
+                            val rate = rateInput.text.toString()
+                                .replace(',', '.').toDoubleOrNull()
+                            val start = try {
+                                LocalDate.parse(startDate)
+                            } catch (_: Exception) { null }
+                            val end = try {
+                                LocalDate.parse(endDate)
+                            } catch (_: Exception) { null }
+
+                            if (name.isEmpty() || amount == null || amount <= 0 ||
+                                rate == null || rate < 0 || start == null ||
+                                end == null || end <= start
+                            ) {
+                                Toast.makeText(
+                                    this,
+                                    "Проверь название, сумму, ставку и даты",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@setOnClickListener
+                            }
+
+                            deposits.add(
+                                Deposit(
+                                    System.currentTimeMillis(),
+                                    name,
+                                    currencySpinner.selectedItem.toString(),
+                                    amount,
+                                    rate,
+                                    startDate,
+                                    endDate
+                                )
+                            )
+                            saveDeposits()
+                            dialog.dismiss()
+                            render()
+                            Toast.makeText(
+                                this, "Депозит создан", Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                }
+                dialog.show()
+            }
     }
 
     private fun currencyOf(e: Entry): String = if (e.category.endsWith("¦KGS")) "KGS" else "RUB"
@@ -819,6 +1037,7 @@ class MainActivity : Activity() {
                             .putString("rate_updated_at", rateUpdatedAt)
                             .apply()
                         saveEntries()
+                        saveDeposits()
                         editingEntryId = null
                         render()
                         Toast.makeText(this, "Данные восстановлены", Toast.LENGTH_LONG).show()
@@ -827,6 +1046,71 @@ class MainActivity : Activity() {
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun saveDeposits() {
+        val depositsJson = JSONArray().apply {
+            deposits.forEach {
+                put(JSONObject()
+                    .put("id", it.id)
+                    .put("title", it.title)
+                    .put("currency", it.currency)
+                    .put("initialAmount", it.initialAmount)
+                    .put("annualRate", it.annualRate)
+                    .put("startDate", it.startDate)
+                    .put("endDate", it.endDate)
+                    .put("transferredToUnallocated", it.transferredToUnallocated))
+            }
+        }
+        val topUpsJson = JSONArray().apply {
+            depositTopUps.forEach {
+                put(JSONObject()
+                    .put("id", it.id)
+                    .put("depositId", it.depositId)
+                    .put("amount", it.amount)
+                    .put("date", it.date))
+            }
+        }
+        prefs.edit()
+            .putString("deposits", depositsJson.toString())
+            .putString("depositTopUps", topUpsJson.toString())
+            .apply()
+    }
+
+    private fun loadDeposits() {
+        try {
+            deposits.clear()
+            depositTopUps.clear()
+
+            val depositsJson = JSONArray(prefs.getString("deposits", "[]"))
+            for (i in 0 until depositsJson.length()) {
+                val o = depositsJson.getJSONObject(i)
+                deposits.add(Deposit(
+                    o.getLong("id"),
+                    o.getString("title"),
+                    o.getString("currency"),
+                    o.getDouble("initialAmount"),
+                    o.getDouble("annualRate"),
+                    o.getString("startDate"),
+                    o.getString("endDate"),
+                    o.optBoolean("transferredToUnallocated", false)
+                ))
+            }
+
+            val topUpsJson = JSONArray(prefs.getString("depositTopUps", "[]"))
+            for (i in 0 until topUpsJson.length()) {
+                val o = topUpsJson.getJSONObject(i)
+                depositTopUps.add(DepositTopUp(
+                    o.getLong("id"),
+                    o.getLong("depositId"),
+                    o.getDouble("amount"),
+                    o.getString("date")
+                ))
+            }
+        } catch (_: Exception) {
+            deposits.clear()
+            depositTopUps.clear()
         }
     }
 
