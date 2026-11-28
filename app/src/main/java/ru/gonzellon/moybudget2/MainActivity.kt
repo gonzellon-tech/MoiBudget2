@@ -545,6 +545,10 @@ class MainActivity : Activity() {
             val symbol = if (deposit.currency == "RUB") "₽" else "сом"
             val principal = depositPrincipalAt(deposit, calculationDate)
             val interest = depositInterestAt(deposit, calculationDate)
+            val monthStart = YearMonth.from(calculationDate).atDay(1)
+            val monthInterest = depositInterestBetween(
+                deposit, monthStart, calculationDate
+            )
 
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -562,7 +566,12 @@ class MainActivity : Activity() {
             text(card, "Ставка: ${deposit.annualRate}% годовых", 13, muted, false)
             text(
                 card,
-                "Начисленные проценты: ${money(interest, symbol)}",
+                "Всего начислено: ${money(interest, symbol)}",
+                14, green, true
+            )
+            text(
+                card,
+                "За текущий месяц: ${money(monthInterest, symbol)}",
                 14, green, true
             )
             text(card, "Открыт: ${deposit.startDate}", 12, muted, false)
@@ -600,13 +609,18 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun depositInterestAt(deposit: Deposit, date: LocalDate): Double {
+    private fun depositInterestBetween(
+        deposit: Deposit,
+        fromDate: LocalDate,
+        toDate: LocalDate
+    ): Double {
         val start = LocalDate.parse(deposit.startDate)
         val end = LocalDate.parse(deposit.endDate)
-        if (date.isBefore(start)) return 0.0
+        val firstDay = maxOf(fromDate, start)
+        val lastDay = minOf(toDate, end)
+        if (lastDay.isBefore(firstDay)) return 0.0
 
-        val lastDay = minOf(date, end)
-        var day = start
+        var day = firstDay
         var interest = 0.0
 
         while (!day.isAfter(lastDay)) {
@@ -615,6 +629,14 @@ class MainActivity : Activity() {
             day = day.plusDays(1)
         }
         return interest
+    }
+
+    private fun depositInterestAt(deposit: Deposit, date: LocalDate): Double {
+        return depositInterestBetween(
+            deposit,
+            LocalDate.parse(deposit.startDate),
+            date
+        )
     }
 
     private fun showAddDepositDialog() {
