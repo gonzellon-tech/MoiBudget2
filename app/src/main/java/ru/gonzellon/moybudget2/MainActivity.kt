@@ -541,14 +541,49 @@ class MainActivity : Activity() {
         }
 
         val calculationDate = LocalDate.now()
+
+        val totalPrincipalRub = deposits.sumOf {
+            val amount = depositPrincipalAt(it, calculationDate)
+            if (it.currency == "KGS") amount * kgsToRub else amount
+        }
+        val totalInterestRub = deposits.sumOf {
+            val amount = depositInterestAt(it, calculationDate)
+            if (it.currency == "KGS") amount * kgsToRub else amount
+        }
+        val monthStart = YearMonth.from(calculationDate).atDay(1)
+        val totalMonthInterestRub = deposits.sumOf {
+            val amount = depositInterestBetween(it, monthStart, calculationDate)
+            if (it.currency == "KGS") amount * kgsToRub else amount
+        }
+
+        if (depositTab == 2 && deposits.isNotEmpty()) {
+            val summaryCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                background = roundedBackground(green, 16)
+            }
+            text(summaryCard, "ОБЩАЯ СУММА В РУБЛЯХ", 14, Color.WHITE, true)
+            text(summaryCard, money(totalPrincipalRub + totalInterestRub, "₽"), 26, Color.WHITE, true)
+            text(summaryCard, "Основной капитал: ${money(totalPrincipalRub, "₽")}", 14, Color.WHITE, false)
+            text(summaryCard, "Всего процентов: ${money(totalInterestRub, "₽")}", 14, Color.WHITE, false)
+            text(summaryCard, "Проценты за месяц: ${money(totalMonthInterestRub, "₽")}", 14, Color.WHITE, false)
+            text(summaryCard, "Курс: 1 сом = ${String.format(Locale.US, "%.5f", kgsToRub)} ₽", 12, Color.WHITE, false)
+            content.addView(summaryCard, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(12)
+            })
+        }
+
         visibleDeposits.forEach { deposit ->
             val symbol = if (deposit.currency == "RUB") "₽" else "сом"
             val principal = depositPrincipalAt(deposit, calculationDate)
             val interest = depositInterestAt(deposit, calculationDate)
-            val monthStart = YearMonth.from(calculationDate).atDay(1)
             val monthInterest = depositInterestBetween(
                 deposit, monthStart, calculationDate
             )
+            val displaySymbol = if (depositTab == 2) "₽" else symbol
+            val displayPrincipal = if (depositTab == 2 && deposit.currency == "KGS") principal * kgsToRub else principal
+            val displayInterest = if (depositTab == 2 && deposit.currency == "KGS") interest * kgsToRub else interest
+            val displayMonthInterest = if (depositTab == 2 && deposit.currency == "KGS") monthInterest * kgsToRub else monthInterest
 
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -560,18 +595,18 @@ class MainActivity : Activity() {
             text(card, deposit.title, 17, Color.BLACK, true)
             text(
                 card,
-                "Основная сумма: ${money(principal, symbol)}",
+                "Основная сумма: ${money(displayPrincipal, displaySymbol)}",
                 14, green, true
             )
             text(card, "Ставка: ${deposit.annualRate}% годовых", 13, muted, false)
             text(
                 card,
-                "Всего начислено: ${money(interest, symbol)}",
+                "Всего начислено: ${money(displayInterest, displaySymbol)}",
                 14, green, true
             )
             text(
                 card,
-                "За текущий месяц: ${money(monthInterest, symbol)}",
+                "За текущий месяц: ${money(displayMonthInterest, displaySymbol)}",
                 14, green, true
             )
             text(card, "Открыт: ${deposit.startDate}", 12, muted, false)
